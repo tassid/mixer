@@ -29,17 +29,19 @@ Na onda de cada música, os traços marcam as partes detectadas e o destaque é 
 
 ## Como o app decide
 
-**Refrão.** Cada compasso vira um vetor de timbre (bandas mel) e harmonia (croma). A matriz de autossimilaridade mostra onde a música muda de parte e quais trechos se repetem. O trecho escolhido é o que mais se repete com mais energia, começando numa frase de 4 compassos.
+**Refrão e frases.** Cada compasso vira um vetor de timbre (bandas mel) e harmonia (croma). A matriz de autossimilaridade mostra onde a música muda de parte e quais trechos se repetem. O trecho escolhido é a parte que mais se repete com mais energia, e ele vai do começo até o fim dessa parte (8 a 32 compassos), para nunca cortar a estrofe no meio. Em **Ajustes finos** dá para fixar outro tamanho.
 
-**Mixagem DJ.** Quando o BPM das duas músicas difere até 8%, a próxima entra por baixo antes do tempo 1, esticada para o BPM da atual sem mudar o tom (SoundTouch) e sem graves. No tempo 1 os graves trocam de música, a anterior sai em um compasso e a nova segue no andamento original. São 8 compassos juntos quando BPM e tom combinam, 4 quando só o BPM combina e 2 quando os tons são distantes.
+**Ponte de andamento.** Quando o BPM muda, a música que sai acelera ou desacelera até o BPM do meio do caminho nos últimos compassos, e a que entra começa nesse BPM e vai até o dela. Tudo com key lock (SoundTouch), então ninguém muda de tom. A rampa usa 4 + 4 compassos (8 + 8 na rampa longa) e diminui quando o trecho é curto.
 
-**Outros estilos.** Quando a diferença de BPM é maior: se a próxima é mais lenta, suspende com filtro e reverb; se é mais rápida, filtro subindo com riser. Corte seco, eco, rewind e rampa de BPM ficam disponíveis para escolher à mão.
+**Mixagem DJ.** Quando o BPM das duas músicas difere até 8%, a próxima entra por baixo antes do tempo 1, no mesmo BPM da atual e sem graves. No tempo 1 os graves trocam de música, a anterior sai em um compasso e a nova segue a rampa até o BPM original. São 8 compassos juntos quando BPM e tom combinam, 4 quando só o BPM combina e 2 quando os tons são distantes.
+
+**Outros estilos.** Quando a diferença de BPM é maior: se a próxima é mais lenta, suspende com filtro e reverb; se é mais rápida, filtro subindo com riser. Corte seco, eco, rewind e rampa longa ficam disponíveis para escolher à mão. As regras seguem técnicas de DJ: entrar e sair no limite das frases, trocar os graves em vez de somar, mudar o andamento aos poucos com o tom travado.
 
 **Ordem automática.** Testa todas as ordens possíveis (até 8 músicas) e escolhe a que junta BPMs próximos e tons compatíveis na roda Camelot, com a energia subindo até o final.
 
 ## Elementos
 
-Todos são sintetizados no próprio app e entram no tempo 1 da próxima música: Shutter, Flash, Whoosh, Riser, Prato invertido, Impacto, Sub drop, Glitch (repete o último tempo em semicolcheias) e Vinyl stop (a música desacelera até parar). No modo automático, o impacto entra sozinho depois do riser, do suspende e cai e do rewind.
+Todos são sintetizados no próprio app e entram no tempo 1 da próxima música: Shutter, Flash, Whoosh, Riser, Prato invertido, Impacto, Sub drop, Glitch (repete o último tempo em semicolcheias) e Vinyl stop (a música desacelera até parar). No modo automático cada transição já vem com elementos que combinam com o estilo (por exemplo prato invertido e shutter na mixagem DJ, impacto e flash no riser, flash e sub drop no suspende e cai), alternando entre transições para não repetir. Clique nos chips para trocar, ou em **voltar ao automático**.
 
 ## O que cada biblioteca faz
 

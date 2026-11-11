@@ -1,6 +1,7 @@
 import { Plan } from "./plan";
-import { stretchRamp } from "./stretch";
 import { outgoingCut, placeElements } from "./elements";
+import { stretchedDuration, stretchPieces } from "./stretch";
+import type { PlanEntry } from "./plan";
 import { SR } from "./types";
 
 function noiseBuffer(ctx: BaseAudioContext, sec: number) {
@@ -40,6 +41,11 @@ function trimTail(buf: AudioBuffer): AudioBuffer {
   return out;
 }
 
+function outgoingCutTime(e: PlanEntry, beat: number, bar: number): number | null {
+  if (e.exit === "rewind") return null;
+  return outgoingCut(e.fx, e.swap, beat, bar);
+}
+
 function hardEnd(p: AudioParam, v: number, t: number) {
   p.setValueAtTime(v, Math.max(0, t - 0.012));
   p.linearRampToValueAtTime(0, t);
@@ -56,52 +62,76 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
   const nb = noiseBuffer(ctx, 2), ir = impulse(ctx);
 
   plan.entries.forEach((e, i) => {
-    const { track, seg, T, gain: vol, end } = e;
-    const bar = seg.bar, beat = seg.spb;
-    const swap = e.next; // tempo 1 da próxima
+    const { track, seg, T, gain: vol, end, swap } = e;
+    const bar = e.barOut, beat = e.beatOut;
     const nextEntry = plan.entries[i + 1];
+    const rOut = e.outBridge?.rate ?? 1;
+    const segEnd = seg.t0 + seg.len;
 
-    /* ----- entrada por baixo (mixagem DJ): a música toca no BPM da anterior, sem graves ----- */
+    /* ----- entrada por baixo (mixagem DJ): no BPM da anterior, sem graves ----- */
     if (e.preroll) {
       const pr = e.preroll;
-      const contentDur = pr.bars * seg.bar;
-      const stretched = stretchRamp(track.buffer, seg.t0 - contentDur, contentDur, pr.tempo, pr.tempo);
+      const content = pr.bars * seg.bar;
+      const buf = stretchPieces(track.buffer, seg.t0 - content, [{ content, r0: pr.rate, r1: pr.rate }]);
       const src = ctx.createBufferSource(), shelf = ctx.createBiquadFilter(), g = ctx.createGain();
-      src.buffer = stretched;
+      src.buffer = buf;
       shelf.type = "lowshelf"; shelf.frequency.value = 220; shelf.gain.value = -40;
       const overlap = T - pr.start;
       g.gain.setValueAtTime(0, pr.start);
-      g.gain.linearRampToValueAtTime(vol * 0.55, pr.start + overlap * 0.5);
-      g.gain.linearRampToValueAtTime(vol * 0.9, T - 0.006);
+      g.gain.linearRampToValueAtTime(vol * 0.5, pr.start + overlap * 0.5);
+      g.gain.linearRampToValueAtTime(vol * 0.85, T - 0.006);
       g.gain.linearRampToValueAtTime(0, T);
       src.connect(shelf).connect(g).connect(bus);
       src.start(pr.start);
       src.stop(T + 0.01);
     }
 
-    /* ----- trecho principal ----- */
-    const src = ctx.createBufferSource(); src.buffer = track.buffer;
+    /* ----- cadeia da música: graves, filtro, volume e corte ----- */
     const shelf = ctx.createBiquadFilter(); shelf.type = "lowshelf"; shelf.frequency.value = 220; shelf.gain.value = 0;
     const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 10; hp.Q.value = 0.7;
     const g = ctx.createGain(); g.gain.value = 0;
     const gate = ctx.createGain(); gate.gain.value = 1;
-    src.connect(shelf).connect(hp).connect(g).connect(gate).connect(bus);
+    shelf.connect(hp).connect(g).connect(gate).connect(bus);
     g.gain.setValueAtTime(0, T); g.gain.linearRampToValueAtTime(vol, T + 0.006);
-    src.start(T, seg.t0);
+
+    const play = (buf: AudioBuffer, at: number) => {
+      const s = ctx.createBufferSource(); s.buffer = buf; s.connect(shelf); s.start(at); return s;
+    };
+    // 1) começo: rampa do BPM de entrada até o BPM original
+    const Kin = e.inBridge?.bars ?? 0;
+    if (Kin) play(stretchPieces(track.buffer, seg.t0, [{ content: Kin * seg.bar, r0: e.inBridge!.rate, r1: 1 }]), T);
+    // 2) meio no BPM original
+    const midFrom = seg.t0 + Kin * seg.bar;
+    const midDur = e.tailStart - e.midStart;
+    const tailSrcStart = e.tailStart;
+    if (midDur > 0.01) {
+      const s = ctx.createBufferSource(); s.buffer = track.buffer; s.connect(shelf);
+      s.start(e.midStart, midFrom, midDur + 0.004);
+    }
+    // 3) final: rampa até o BPM de saída, sobreposição e cauda, tudo com key lock
+    const Kout = e.outBridge?.bars ?? 0;
+    const pieces = [];
+    if (Kout) pieces.push({ content: Kout * seg.bar, r0: 1, r1: rOut });
+    const constContent = e.overlapBars * seg.bar + e.tailContent;
+    if (constContent > 0.01) pieces.push({ content: constContent, r0: rOut, r1: rOut });
+    if (pieces.length) {
+      const from = segEnd - (Kout + e.overlapBars) * seg.bar;
+      play(stretchPieces(track.buffer, from, pieces), tailSrcStart);
+    }
 
     /* elementos da transição que sai desta música */
     if (nextEntry && e.fx.length) {
-      const cut = outgoingCut(e.fx, swap, beat, bar);
-      if (cut !== null && e.exit !== "rewind") hardEnd(gate.gain, 1, cut);
+      const cut = outgoingCutTime(e, beat, bar);
+      if (cut !== null) hardEnd(gate.gain, 1, cut);
       placeElements(e.fx, {
         ctx, bus: fxBus, noise: nb, reverb: ir, t: swap, beat, bar,
-        out: { buffer: track.buffer, contentEnd: seg.t0 + seg.len, vol }
+        out: { buffer: track.buffer, contentEnd: segEnd, vol }
       });
     }
 
+    const segEndTime = e.tailStart + (Kout ? stretchedDuration(Kout * seg.bar, 1, rOut) : 0) + e.overlapBars * seg.bar / rOut;
     switch (e.exit) {
       case "blend": {
-        // troca de graves no tempo 1 da próxima e saída suave em um compasso
         const ov = nextEntry?.preroll ? swap - nextEntry.preroll.start : bar;
         hp.frequency.setValueAtTime(10, swap - ov * 0.5);
         hp.frequency.exponentialRampToValueAtTime(140, swap);
@@ -110,73 +140,57 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
         g.gain.setValueAtTime(vol, swap);
         g.gain.linearRampToValueAtTime(0, end);
         hp.frequency.exponentialRampToValueAtTime(900, end);
-        src.stop(end + 0.02);
         break;
       }
       case "fade": {
         const s = Math.max(T + 0.05, end - 2 * bar);
-        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(0, end); src.stop(end + 0.02);
+        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(0, end);
         break;
       }
       case "vocal": {
-        const s = Math.max(T + 0.05, end - 2 * bar);
-        hp.frequency.setValueAtTime(10, s); hp.frequency.exponentialRampToValueAtTime(1200, end);
+        const s = Math.max(T + 0.05, segEndTime - 2 * bar);
+        hp.frequency.setValueAtTime(10, s); hp.frequency.exponentialRampToValueAtTime(1200, segEndTime);
         const send = ctx.createGain(), conv = ctx.createConvolver(), out = ctx.createGain();
         conv.buffer = ir;
-        send.gain.setValueAtTime(0, s); send.gain.linearRampToValueAtTime(0.9 * vol, end);
-        out.gain.setValueAtTime(0.8, T); out.gain.setValueAtTime(0.8, e.next); out.gain.linearRampToValueAtTime(0, e.next + 0.3);
+        send.gain.setValueAtTime(0, s); send.gain.linearRampToValueAtTime(0.9 * vol, segEndTime);
+        out.gain.setValueAtTime(0.8, T); out.gain.setValueAtTime(0.8, swap); out.gain.linearRampToValueAtTime(0, swap + 0.3);
         hp.connect(send).connect(conv).connect(out).connect(bus);
-        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(vol * 0.55, end - 0.012); g.gain.linearRampToValueAtTime(0, end);
-        src.stop(end + 0.02);
+        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(vol * 0.55, segEndTime - 0.012); g.gain.linearRampToValueAtTime(0, segEndTime);
         break;
       }
       case "riser": {
-        const s = Math.max(T + 0.05, end - 4 * bar);
-        hp.frequency.setValueAtTime(10, s); hp.frequency.exponentialRampToValueAtTime(2500, end);
-        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(vol * 1.15, end - 0.012); g.gain.linearRampToValueAtTime(0, end);
+        const s = Math.max(T + 0.05, segEndTime - 4 * bar);
+        hp.frequency.setValueAtTime(10, s); hp.frequency.exponentialRampToValueAtTime(2500, segEndTime);
+        g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(vol * 1.15, segEndTime - 0.012); g.gain.linearRampToValueAtTime(0, segEndTime);
         const ns = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), ng = ctx.createGain();
         ns.buffer = nb; ns.loop = true; bp.type = "bandpass"; bp.Q.value = 0.9;
-        bp.frequency.setValueAtTime(400, s); bp.frequency.exponentialRampToValueAtTime(7500, end);
-        ng.gain.setValueAtTime(0.0001, s); ng.gain.exponentialRampToValueAtTime(0.3, end - 0.012); ng.gain.linearRampToValueAtTime(0, end);
-        ns.connect(bp).connect(ng).connect(bus); ns.start(s); ns.stop(end + 0.02);
-        src.stop(end + 0.02);
+        bp.frequency.setValueAtTime(400, s); bp.frequency.exponentialRampToValueAtTime(7500, segEndTime);
+        ng.gain.setValueAtTime(0.0001, s); ng.gain.exponentialRampToValueAtTime(0.3, segEndTime - 0.012); ng.gain.linearRampToValueAtTime(0, segEndTime);
+        ns.connect(bp).connect(ng).connect(bus); ns.start(s); ns.stop(segEndTime + 0.02);
         break;
       }
       case "echo": {
         const send = ctx.createGain(), dl = ctx.createDelay(4), fb = ctx.createGain(), ehp = ctx.createBiquadFilter(), out = ctx.createGain();
         dl.delayTime.value = beat; fb.gain.value = 0.5; ehp.type = "highpass"; ehp.frequency.value = 350;
-        send.gain.setValueAtTime(0, T); send.gain.setValueAtTime(0, end - beat); send.gain.linearRampToValueAtTime(1, end - beat + 0.01);
-        send.gain.setValueAtTime(1, end - 0.012); send.gain.linearRampToValueAtTime(0, end);
-        out.gain.setValueAtTime(0.85 * vol, T); out.gain.setValueAtTime(0.85 * vol, e.next); out.gain.linearRampToValueAtTime(0, e.next + bar);
+        send.gain.setValueAtTime(0, T); send.gain.setValueAtTime(0, segEndTime - beat); send.gain.linearRampToValueAtTime(1, segEndTime - beat + 0.01);
+        send.gain.setValueAtTime(1, segEndTime - 0.012); send.gain.linearRampToValueAtTime(0, segEndTime);
+        out.gain.setValueAtTime(0.85 * vol, T); out.gain.setValueAtTime(0.85 * vol, swap); out.gain.linearRampToValueAtTime(0, swap + bar);
         hp.connect(send).connect(dl); dl.connect(fb).connect(dl); dl.connect(ehp).connect(out).connect(bus);
-        hardEnd(g.gain, vol, end); src.stop(end + 0.02);
+        hardEnd(g.gain, vol, segEndTime);
         break;
       }
       case "rewind": {
-        const cut = T + (e.tm.cut ?? 0), Tr = e.tm.tr ?? 0.3;
-        hardEnd(g.gain, vol, cut); src.stop(cut + 0.02);
+        const cut = segEndTime - bar / 2, Tr = 0.35 * bar;
+        hardEnd(g.gain, vol, cut);
         const r = ctx.createBufferSource(), rg = ctx.createGain();
-        r.buffer = reversedSlice(track.buffer, seg.t0 + seg.len - bar, bar);
+        r.buffer = reversedSlice(track.buffer, segEnd - seg.bar, seg.bar);
         r.playbackRate.setValueAtTime(1, cut); r.playbackRate.linearRampToValueAtTime(4, cut + Tr);
         rg.gain.setValueAtTime(vol, cut); rg.gain.setValueAtTime(vol, cut + Tr * 0.7); rg.gain.linearRampToValueAtTime(0, cut + Tr);
         r.connect(rg).connect(bus); r.start(cut); r.stop(cut + Tr + 0.01);
         break;
       }
-      case "rampa": {
-        const rs = T + (e.tm.rs ?? 0);
-        const N = Math.min(4, seg.bars);
-        hardEnd(g.gain, vol, rs + 0.006); src.stop(rs + 0.03);
-        const ramp = stretchRamp(track.buffer, seg.t0 + seg.len - N * bar, N * bar, 1, e.ratio);
-        const rsrc = ctx.createBufferSource(), rg = ctx.createGain();
-        rsrc.buffer = ramp;
-        rg.gain.setValueAtTime(0, rs); rg.gain.linearRampToValueAtTime(vol, rs + 0.006);
-        rsrc.connect(rg).connect(gate);
-        hardEnd(rg.gain, vol, end);
-        rsrc.start(rs); rsrc.stop(end + 0.02);
-        break;
-      }
       default: {
-        hardEnd(g.gain, vol, end); src.stop(end + 0.02);
+        hardEnd(g.gain, vol, segEndTime);
       }
     }
   });

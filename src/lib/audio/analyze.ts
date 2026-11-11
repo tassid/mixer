@@ -1,6 +1,6 @@
 import { Analysis, SR, Segment, Track } from "./types";
 import { beatAt, beatsOf, medianSpb } from "./grid";
-import { bestStart } from "./structure";
+import { bestStart, sectionLength } from "./structure";
 
 export { beatsOf } from "./grid";
 
@@ -66,10 +66,16 @@ export function downbeatTime(t: Track, j: number): number {
   return beatAt(beatsOf(t), t.phase + 4 * j);
 }
 
+/** Compassos do trecho: o escolhido, ou (0 = automático) até o fim da parte. */
+export function effBars(t: Track): number {
+  return t.bars || sectionLength(t, t.startDown);
+}
+
 export function maxStart(t: Track): number {
   const beats = beatsOf(t);
+  const bars = t.bars || 4;
   let j = 0;
-  while (beatAt(beats, t.phase + 4 * (j + 1 + t.bars)) <= t.duration) j++;
+  while (beatAt(beats, t.phase + 4 * (j + 1 + bars)) <= t.duration) j++;
   return j;
 }
 
@@ -92,7 +98,7 @@ export function nearestDownbeat(t: Track, time: number): number {
 export function segmentOf(t: Track): Segment {
   const beats = beatsOf(t);
   const b0 = t.phase + 4 * t.startDown;
-  let bars = t.bars;
+  let bars = effBars(t);
   while (bars > 1 && beatAt(beats, b0 + 4 * bars) > t.duration) bars--;
   const t0 = beatAt(beats, b0);
   const t1 = Math.min(beatAt(beats, b0 + 4 * bars), t.duration);

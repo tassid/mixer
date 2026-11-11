@@ -61,11 +61,11 @@ export const EXIT_LABEL: Record<ExitKind, string> = {
   riser: "Filtro subindo + riser",
   echo: "Eco saindo",
   rewind: "Rewind",
-  rampa: "Rampa de BPM (mantém o tom)",
+  rampa: "Rampa longa de BPM (8 + 8 compassos)",
   fade: "Fade out"
 };
 
-export const BAR_OPTIONS = [4, 8, 12, 16, 24, 32];
+export const BAR_OPTIONS = [0, 4, 8, 12, 16, 24, 32];
 
 export const ELEMENT_LABEL: Record<ElementKind, string> = {
   shutter: "Shutter",

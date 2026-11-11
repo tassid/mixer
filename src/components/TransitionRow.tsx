@@ -27,6 +27,10 @@ export default function TransitionRow({ from, to, index, busy, onPreview, onActi
     onAction({ type: "fx", fx: next });
   };
   const overlapBars = to.preroll?.bars ?? 0;
+  const k = from.outBridge?.bars ?? 0;
+  const tempoTxt = k
+    ? `andamento ${to.seg.bpm > from.seg.bpm ? "acelera" : "desacelera"} de ${from.seg.bpm.toFixed(0)} até ${to.seg.bpm.toFixed(0)} BPM em ${k * 2} compassos, sem mudar o tom`
+    : null;
 
   return (
     <li className={`transition compat-${from.keyCompat ?? "mesmo"}`} aria-label={`Transição da música ${index + 1} para a ${index + 2}`}>
@@ -38,10 +42,11 @@ export default function TransitionRow({ from, to, index, busy, onPreview, onActi
               {EXIT_LABEL[from.exit]}
               {overlapBars ? `, ${overlapBars} compassos juntas` : ""}
             </span>
-            <span className="t-meta">
+            <span className="t-meta key">
               {diffTxt} · {from.keyCompat ? COMPAT_TEXT[from.keyCompat] : ""}
               {from.fellBack ? " · o estilo escolhido não coube aqui, usando o mais próximo" : ""}
             </span>
+            {tempoTxt && <span className="t-meta">{tempoTxt}</span>}
           </div>
           <button onClick={onPreview} disabled={busy}>{busy ? "Preparando..." : "Ouvir transição"}</button>
         </div>

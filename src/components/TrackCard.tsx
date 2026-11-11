@@ -107,7 +107,7 @@ export default function TrackCard({ track, index, count, seg, peaks, resolvedExi
             <label>
               Duração do trecho
               <select id={`bars-${track.id}`} value={track.bars} onChange={(e) => onAction({ type: "bars", bars: +e.target.value })}>
-                {BAR_OPTIONS.map((b) => <option key={b} value={b}>{b} compassos</option>)}
+                {BAR_OPTIONS.map((b) => <option key={b} value={b}>{b === 0 ? "Até o fim da parte (automático)" : `${b} compassos`}</option>)}
               </select>
             </label>
             <button onClick={() => onAction({ type: "nudge", dir: -1 })}>◀ 1 compasso</button>

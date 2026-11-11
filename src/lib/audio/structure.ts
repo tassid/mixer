@@ -128,20 +128,46 @@ function compute(t: Pick<Track, "analysis" | "beatMul" | "phase" | "duration">):
   return { times, energy: enN, rep: repN, novelty: novN, grid, boundaries };
 }
 
-/** Melhor início para um trecho de `bars` compassos: repetição (refrão) + energia, alinhado às frases. */
-export function bestStart(t: Pick<Track, "analysis" | "beatMul" | "phase" | "duration">, bars: number): number {
+/** Tamanho da parte que começa no compasso `start`: até a próxima divisa de parte (8 a 32 compassos), em frases de 4. */
+export function sectionLength(t: Pick<Track, "analysis" | "beatMul" | "phase" | "duration">, start: number): number {
   const st = structureOf(t);
   const n = st.times.length;
-  if (n < bars + 1) return 0;
+  const room = n - start;
+  if (room <= 4) return Math.max(1, room);
+  const ends = st.boundaries.filter((e) => e - start >= 8 && e - start <= 32);
+  if (ends.length) {
+    let best = ends[0], bs = -Infinity;
+    for (const e of ends) {
+      const L = e - start;
+      const s = st.novelty[e] * 0.6 - Math.abs(L - 16) / 32;
+      if (s > bs) { bs = s; best = e; }
+    }
+    return Math.min(room, best - start);
+  }
+  return Math.max(4, Math.min(16, Math.floor(room / 4) * 4));
+}
+
+/** Melhor trecho: começa numa divisa de parte, termina no fim da parte, e é o que mais se repete com energia alta. */
+export function bestSegment(t: Pick<Track, "analysis" | "beatMul" | "phase" | "duration">, fixedBars: number): { start: number; bars: number } {
+  const st = structureOf(t);
+  const n = st.times.length;
+  if (n < 9) return { start: 0, bars: fixedBars || Math.max(1, n) };
   const bnd = new Set(st.boundaries);
-  let best = -Infinity, bj = 0;
-  for (let j = 0; j + bars <= n; j++) {
+  let best = -Infinity, res = { start: 0, bars: fixedBars || 8 };
+  for (let j = 0; j < n - 4; j++) {
     if ((j - st.grid) % 4 !== 0) continue;
+    const bars = fixedBars || sectionLength(t, j);
+    if (j + bars > n) continue;
     let r = 0, e = 0;
     for (let k = j; k < j + bars; k++) { r += st.rep[k]; e += st.energy[k]; }
     r /= bars; e /= bars;
-    const score = 0.55 * r + 0.45 * e + (bnd.has(j) ? 0.12 : 0) - (j < 4 ? 0.3 : 0);
-    if (score > best) { best = score; bj = j; }
+    const endsOnBoundary = bnd.has(j + bars) ? 0.08 : 0;
+    const score = 0.55 * r + 0.45 * e + (bnd.has(j) ? 0.12 : 0) + endsOnBoundary - (j < 4 ? 0.3 : 0) - (bars < 8 ? 0.2 : 0);
+    if (score > best) { best = score; res = { start: j, bars }; }
   }
-  return bj;
+  return res;
+}
+
+export function bestStart(t: Pick<Track, "analysis" | "beatMul" | "phase" | "duration">, bars: number): number {
+  return bestSegment(t, bars).start;
 }

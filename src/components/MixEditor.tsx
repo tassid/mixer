@@ -24,7 +24,7 @@ async function makeTrack(name: string, buffer: AudioBuffer, mediaUrl: string, ex
   const analysis = await analyzeBuffer(buffer);
   const t: Track = {
     id: `t${++uid}`, name, buffer, mediaUrl, peaks: peaksOf(buffer), duration: buffer.duration, example, analysis,
-    beatMul: 1, mulByUser: false, phase: 0, bars: 8, startDown: 0, userStart: false, exit: "auto", fx: null, blendBars: 0
+    beatMul: 1, mulByUser: false, phase: 0, bars: 0, startDown: 0, userStart: false, exit: "auto", fx: null, blendBars: 0
   };
   t.phase = detectPhase(t);
   t.startDown = autoStart(t);
@@ -188,7 +188,8 @@ export default function MixEditor() {
     if (!plan) return;
     const A = plan.entries[i], B = plan.entries[i + 1];
     const overlap = B.preroll?.bars ?? 0;
-    const na = Math.min(A.seg.bars, Math.max(4, overlap + 2)), nb = Math.min(4, B.seg.bars);
+    const kOut = A.outBridge?.bars ?? 0, kIn = B.inBridge?.bars ?? 0;
+    const na = Math.min(A.seg.bars, Math.max(4, overlap + kOut + 2)), nb = Math.min(B.seg.bars, Math.max(4, kIn + 2));
     const segA: Segment = { ...A.seg, t0: A.seg.t0 + A.seg.len - na * A.seg.bar, len: na * A.seg.bar, bars: na };
     const segB: Segment = { ...B.seg, len: nb * B.seg.bar, bars: nb };
     setPreviewing(i);
@@ -197,8 +198,6 @@ export default function MixEditor() {
         { track: A.track, seg: segA, exit: A.exit, fx: A.fx },
         { track: B.track, seg: segB, exit: "fade", fx: [] }
       ]);
-      // mantém a razão de BPM do mix completo para a rampa
-      p.entries[0].ratio = A.ratio;
       const buf = await renderPlan(p);
       const url = URL.createObjectURL(wavBlob(buf));
       setPreview((old) => { if (old) URL.revokeObjectURL(old.url); return { url, label: `Transição ${i + 1} → ${i + 2}: ${EXIT_LABEL[A.exit]}` }; });
