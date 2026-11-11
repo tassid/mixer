@@ -6,7 +6,7 @@ import "@fontsource/jetbrains-mono/600.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Corte no Tempo 1",
+  title: "Mixer",
   description: "Monte mix edits no navegador: BPM, tempo 1, tom e trecho mais forte de cada música, com transições no tempo certo."
 };
 

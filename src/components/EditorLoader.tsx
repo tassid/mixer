@@ -8,7 +8,7 @@ const MixEditor = dynamic(() => import("./MixEditor"), {
   loading: () => (
     <div className="wrap">
       <header className="intro">
-        <h1>Corte no <em>Tempo 1</em></h1>
+        <h1>Mix<em>er</em></h1>
         <p className="lede">Carregando o estúdio...</p>
       </header>
     </div>

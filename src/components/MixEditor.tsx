@@ -245,7 +245,7 @@ export default function MixEditor() {
     <>
       <div className="wrap">
         <header className="intro">
-          <h1>Corte no <em>Tempo 1</em></h1>
+          <h1>Mix<em>er</em></h1>
           <p className="lede">
             Monte um mix edit com transições no tempo certo. O app acha o BPM, o tempo 1, o tom e o trecho mais forte de cada música, e escolhe a transição pela diferença de andamento. Tudo roda no seu navegador: as músicas não são enviadas para lugar nenhum.
           </p>

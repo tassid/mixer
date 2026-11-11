@@ -1,4 +1,4 @@
-# Corte no Tempo 1
+# Mixer
 
 App web para montar mix edits com transições no tempo certo. Você arrasta as músicas, coloca na ordem e o app faz o resto: acha o BPM, as batidas, o tempo 1, o tom e o trecho mais forte de cada música, escolhe a transição pela diferença de andamento e exporta o mix em WAV ou MP3.
 
