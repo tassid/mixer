@@ -16,6 +16,7 @@ interface Props {
   duration: number;
   start: number;
   end: number;
+  marks: number[];
   label: string;
   onPickStart: (time: number) => void;
   onPlayingChange?: (playing: boolean) => void;
@@ -26,22 +27,36 @@ function cssVar(name: string) {
 }
 
 const TrackWave = forwardRef<TrackWaveHandle, Props>(function TrackWave(
-  { mediaUrl, peaks, duration, start, end, label, onPickStart, onPlayingChange },
+  { mediaUrl, peaks, duration, start, end, marks, label, onPickStart, onPlayingChange },
   ref
 ) {
   const box = useRef<HTMLDivElement>(null);
   const ws = useRef<WaveSurfer | null>(null);
   const region = useRef<Region | null>(null);
+  const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
+  const markRegions = useRef<Region[]>([]);
+  const ready = useRef(false);
   const pick = useRef(onPickStart);
   const playingCb = useRef(onPlayingChange);
   const range = useRef({ start, end });
+  const marksRef = useRef(marks);
   useEffect(() => {
     pick.current = onPickStart;
     playingCb.current = onPlayingChange;
     range.current = { start, end };
+    marksRef.current = marks;
   });
 
   const stop = useRef(() => { ws.current?.pause(); });
+
+  function drawMarks() {
+    const regions = regionsRef.current;
+    if (!regions) return;
+    markRegions.current.forEach((r) => r.remove());
+    markRegions.current = marksRef.current
+      .filter((m) => m > 0.5)
+      .map((m) => regions.addRegion({ start: m, drag: false, resize: false, color: cssVar("--mark") }));
+  }
 
   useEffect(() => {
     if (!box.current) return;
@@ -68,7 +83,10 @@ const TrackWave = forwardRef<TrackWaveHandle, Props>(function TrackWave(
     });
     ws.current = w;
     // a região só aparece depois que a forma de onda está pronta
+    regionsRef.current = regions;
     w.on("ready", () => {
+      ready.current = true;
+      drawMarks();
       region.current = regions.addRegion({
         start: range.current.start,
         end: range.current.end,
@@ -95,12 +113,20 @@ const TrackWave = forwardRef<TrackWaveHandle, Props>(function TrackWave(
       media.src = "";
       ws.current = null;
       region.current = null;
+      regionsRef.current = null;
+      markRegions.current = [];
+      ready.current = false;
     };
   }, [mediaUrl, peaks, duration]);
 
   useEffect(() => {
     region.current?.setOptions({ start, end });
   }, [start, end]);
+
+  const marksKey = marks.map((m) => m.toFixed(2)).join(",");
+  useEffect(() => {
+    if (ready.current) drawMarks();
+  }, [marksKey]);
 
   useImperativeHandle(ref, () => ({
     playSegment: () => {

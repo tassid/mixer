@@ -9,7 +9,8 @@ import MixResult from "./MixResult";
 import {
   analyzeBuffer, autoStart, bpmOf, decodeFile, detectPhase, downbeatTime, maxStart, nearestDownbeat, peaksOf, segmentOf
 } from "@/lib/audio/analyze";
-import { buildPlan, type Plan } from "@/lib/audio/plan";
+import { buildPlan, sectionTimes, type Plan } from "@/lib/audio/plan";
+import { smartOrder } from "@/lib/audio/order";
 import { renderPlan } from "@/lib/audio/render";
 import { formatTime, wavBlob } from "@/lib/audio/export";
 import { EXAMPLES, synthTrack } from "@/lib/audio/examples";
@@ -23,7 +24,7 @@ async function makeTrack(name: string, buffer: AudioBuffer, mediaUrl: string, ex
   const analysis = await analyzeBuffer(buffer);
   const t: Track = {
     id: `t${++uid}`, name, buffer, mediaUrl, peaks: peaksOf(buffer), duration: buffer.duration, example, analysis,
-    beatMul: 1, mulByUser: false, phase: 0, bars: 8, startDown: 0, userStart: false, exit: "auto", impact: "auto"
+    beatMul: 1, mulByUser: false, phase: 0, bars: 8, startDown: 0, userStart: false, exit: "auto", fx: null, blendBars: 0
   };
   t.phase = detectPhase(t);
   t.startDown = autoStart(t);
@@ -82,7 +83,8 @@ function applyAction(t: Track, a: TrackAction): Track {
       return n;
     }
     case "exit": return { ...t, exit: a.exit };
-    case "impact": return { ...t, impact: a.impact };
+    case "fx": return { ...t, fx: a.fx };
+    case "blendBars": return { ...t, blendBars: a.bars };
     default: return t;
   }
 }
@@ -185,14 +187,15 @@ export default function MixEditor() {
   async function previewTransition(i: number) {
     if (!plan) return;
     const A = plan.entries[i], B = plan.entries[i + 1];
-    const na = Math.min(4, A.seg.bars), nb = Math.min(4, B.seg.bars);
+    const overlap = B.preroll?.bars ?? 0;
+    const na = Math.min(A.seg.bars, Math.max(4, overlap + 2)), nb = Math.min(4, B.seg.bars);
     const segA: Segment = { ...A.seg, t0: A.seg.t0 + A.seg.len - na * A.seg.bar, len: na * A.seg.bar, bars: na };
     const segB: Segment = { ...B.seg, len: nb * B.seg.bar, bars: nb };
     setPreviewing(i);
     try {
       const p = buildPlan([
-        { track: A.track, seg: segA, exit: A.exit },
-        { track: B.track, seg: segB, exit: "fade", impact: B.impact }
+        { track: A.track, seg: segA, exit: A.exit, fx: A.fx },
+        { track: B.track, seg: segB, exit: "fade", fx: [] }
       ]);
       // mantém a razão de BPM do mix completo para a rampa
       p.entries[0].ratio = A.ratio;
@@ -203,6 +206,13 @@ export default function MixEditor() {
       setStatus({ msg: `Não consegui gerar a prévia: ${(err as Error).message}`, err: true });
     }
     setPreviewing(null);
+  }
+
+  function reorder() {
+    const ids = smartOrder(tracks);
+    invalidateMix();
+    setTracks((cur) => ids.map((id) => cur.find((t) => t.id === id)!).filter(Boolean));
+    setStatus({ msg: "Ordem ajustada: BPM próximo, tons compatíveis e energia subindo até o final." });
   }
 
   useEffect(() => {
@@ -247,11 +257,11 @@ export default function MixEditor() {
         <header className="intro">
           <h1>Mix<em>er</em></h1>
           <p className="lede">
-            Monte um mix edit com transições no tempo certo. O app acha o BPM, o tempo 1, o tom e o trecho mais forte de cada música, e escolhe a transição pela diferença de andamento. Tudo roda no seu navegador: as músicas não são enviadas para lugar nenhum.
+            Monte um mix edit como um DJ. O app acha o BPM, o tempo 1, o tom e o refrão de cada música, coloca a próxima entrando por baixo no mesmo andamento e troca os graves no tempo certo. Você ainda pode escolher outros estilos e somar elementos como shutter, flash e whoosh. Tudo roda no seu navegador: as músicas não são enviadas para lugar nenhum.
           </p>
           <ol className="steps">
             <li>Adicione as músicas</li>
-            <li>Arraste para pôr na ordem</li>
+            <li>Ordene (ou deixe o app ordenar)</li>
             <li>Ouça as transições e monte o mix</li>
           </ol>
         </header>
@@ -282,6 +292,13 @@ export default function MixEditor() {
 
         <p className={`status${status.err ? " err" : ""}`} role="status" aria-live="polite">{status.msg}</p>
 
+        {plan && tracks.length > 2 && (
+          <div className="toolbar">
+            <button onClick={reorder}>Ordenar automaticamente</button>
+            <span className="auto-note">Junta BPMs próximos e tons que combinam, com a energia subindo até o final.</span>
+          </div>
+        )}
+
         {plan && (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={tracks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
@@ -300,10 +317,18 @@ export default function MixEditor() {
                         seg={segs.get(t.id)!}
                         peaks={t.peaks}
                         resolvedExitNote={note}
+                        sections={sectionTimes(t)}
                         onAction={(a) => onAction(t.id, a)}
                       />
                       {i < tracks.length - 1 && (
-                        <TransitionRow from={e} to={plan.entries[i + 1]} index={i} busy={previewing === i} onPreview={() => previewTransition(i)} />
+                        <TransitionRow
+                          from={e}
+                          to={plan.entries[i + 1]}
+                          index={i}
+                          busy={previewing === i}
+                          onPreview={() => previewTransition(i)}
+                          onAction={(a) => onAction(t.id, a)}
+                        />
                       )}
                     </Fragment>
                   );

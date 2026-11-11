@@ -38,5 +38,5 @@ export function compat(a: string, b: string): Compat {
 export const COMPAT_TEXT: Record<Compat, string> = {
   mesmo: "Mesmo tom: dá até para sobrepor as duas",
   vizinho: "Tons vizinhos: soam bem juntos",
-  distante: "Tons distantes: prefira corte seco, rewind ou impacto"
+  distante: "Tons distantes: o app usa sobreposição curta ou corte"
 };

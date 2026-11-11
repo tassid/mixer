@@ -6,7 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import TrackWave, { type TrackWaveHandle } from "./TrackWave";
 import { camelot, keyName } from "@/lib/audio/keys";
 import { formatTime } from "@/lib/audio/export";
-import { BAR_OPTIONS, EXIT_LABEL, type ExitKind, type ImpactMode, type Segment, type Track } from "@/lib/audio/types";
+import { BAR_OPTIONS, type ElementKind, type ExitKind, type Segment, type Track } from "@/lib/audio/types";
 
 export type TrackAction =
   | { type: "move"; dir: -1 | 1 }
@@ -17,7 +17,8 @@ export type TrackAction =
   | { type: "mul"; mul: 0.5 | 2 }
   | { type: "phase" }
   | { type: "exit"; exit: ExitKind }
-  | { type: "impact"; impact: ImpactMode };
+  | { type: "fx"; fx: ElementKind[] | null }
+  | { type: "blendBars"; bars: number };
 
 interface Props {
   track: Track;
@@ -26,10 +27,11 @@ interface Props {
   seg: Segment;
   peaks: Float32Array;
   resolvedExitNote: string | null;
+  sections: number[];
   onAction: (a: TrackAction) => void;
 }
 
-export default function TrackCard({ track, index, count, seg, peaks, resolvedExitNote, onAction }: Props) {
+export default function TrackCard({ track, index, count, seg, peaks, resolvedExitNote, sections, onAction }: Props) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id: track.id });
   const wave = useRef<TrackWaveHandle>(null);
   const [playing, setPlaying] = useState(false);
@@ -74,26 +76,17 @@ export default function TrackCard({ track, index, count, seg, peaks, resolvedExi
           duration={track.duration}
           start={seg.t0}
           end={seg.t0 + seg.len}
+          marks={sections}
           label={`Forma de onda de ${track.name}. Clique ou arraste o trecho destacado para mudar onde ele começa.`}
           onPickStart={(t) => onAction({ type: "pick", time: t })}
           onPlayingChange={setPlaying}
         />
         <p className="hint">
-          Trecho de {formatTime(seg.t0)} a {formatTime(seg.t0 + seg.len)}. Arraste o destaque ou clique na onda; ele sempre encaixa no tempo 1.
+          Trecho de {formatTime(seg.t0)} a {formatTime(seg.t0 + seg.len)}. Os traços marcam as partes da música. Arraste o destaque ou clique na onda; ele sempre encaixa no tempo 1.
         </p>
 
         <div className="row">
           <button onClick={() => wave.current?.playSegment()}>{playing ? "Parar" : "Ouvir trecho"}</button>
-          {!last && (
-            <label>
-              Saída
-              <select id={`exit-${track.id}`} value={track.exit} onChange={(e) => onAction({ type: "exit", exit: e.target.value as ExitKind })}>
-                {(Object.keys(EXIT_LABEL) as ExitKind[]).map((k) => (
-                  <option key={k} value={k}>{EXIT_LABEL[k]}</option>
-                ))}
-              </select>
-            </label>
-          )}
           {last && (
             <label>
               Final
@@ -105,7 +98,7 @@ export default function TrackCard({ track, index, count, seg, peaks, resolvedExi
               </select>
             </label>
           )}
-          {resolvedExitNote && <span className="auto-note">{resolvedExitNote}</span>}
+          {last && resolvedExitNote && <span className="auto-note">{resolvedExitNote}</span>}
         </div>
 
         <details>
@@ -127,14 +120,6 @@ export default function TrackCard({ track, index, count, seg, peaks, resolvedExi
             <span className="auto-note">Confiança do BPM: {track.analysis.confidence >= 3 ? "alta" : track.analysis.confidence >= 1.5 ? "média" : "baixa"}</span>
           </div>
           <div className="row">
-            <label>
-              Entrada desta música
-              <select id={`imp-${track.id}`} value={track.impact} onChange={(e) => onAction({ type: "impact", impact: e.target.value as ImpactMode })}>
-                <option value="auto">Impacto automático</option>
-                <option value="sim">Com impacto</option>
-                <option value="nao">Sem impacto</option>
-              </select>
-            </label>
             <button className="danger" onClick={() => onAction({ type: "remove" })}>Remover música</button>
           </div>
         </details>

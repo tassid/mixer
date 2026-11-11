@@ -1,8 +1,8 @@
 export const SR = 44100;
 
-export type ExitKind = "auto" | "corte" | "vocal" | "riser" | "echo" | "rewind" | "rampa" | "fade";
+export type ExitKind = "auto" | "blend" | "corte" | "vocal" | "riser" | "echo" | "rewind" | "rampa" | "fade";
 export type ResolvedExit = Exclude<ExitKind, "auto">;
-export type ImpactMode = "auto" | "sim" | "nao";
+export type ElementKind = "shutter" | "flash" | "whoosh" | "riser" | "revcymbal" | "impacto" | "subdrop" | "glitch" | "vinylstop";
 export type BeatMul = 0.5 | 1 | 2;
 
 /** Resultado bruto da análise (worker + pós-processamento). */
@@ -16,6 +16,10 @@ export interface Analysis {
   lowOnset: Float32Array; // fluxo de energia grave por frame
   energyCum: Float64Array; // energia acumulada por frame
   fps: number;
+  mel: Float32Array; // timbre: nMel bandas por frame espectral
+  chroma: Float32Array; // harmonia: 12 classes de altura por frame espectral
+  specFps: number;
+  nMel: number;
 }
 
 export interface Track {
@@ -34,7 +38,10 @@ export interface Track {
   startDown: number; // índice do tempo 1 onde o trecho começa
   userStart: boolean;
   exit: ExitKind;
-  impact: ImpactMode;
+  /** elementos na transição que sai desta música; null = automático */
+  fx: ElementKind[] | null;
+  /** compassos de sobreposição na mixagem DJ; 0 = automático */
+  blendBars: number;
 }
 
 export interface Segment {
@@ -48,6 +55,7 @@ export interface Segment {
 
 export const EXIT_LABEL: Record<ExitKind, string> = {
   auto: "Automática (recomendada)",
+  blend: "Mixagem DJ (sobrepõe no tempo)",
   corte: "Corte seco no tempo 1",
   vocal: "Suspende e cai (filtro + reverb)",
   riser: "Filtro subindo + riser",
@@ -58,3 +66,15 @@ export const EXIT_LABEL: Record<ExitKind, string> = {
 };
 
 export const BAR_OPTIONS = [4, 8, 12, 16, 24, 32];
+
+export const ELEMENT_LABEL: Record<ElementKind, string> = {
+  shutter: "Shutter",
+  flash: "Flash",
+  whoosh: "Whoosh",
+  riser: "Riser",
+  revcymbal: "Prato invertido",
+  impacto: "Impacto",
+  subdrop: "Sub drop",
+  glitch: "Glitch",
+  vinylstop: "Vinyl stop"
+};

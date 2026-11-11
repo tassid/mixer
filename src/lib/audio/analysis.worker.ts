@@ -47,6 +47,79 @@ function energyFeatures(x: Float32Array, sampleRate: number) {
   return { lowOnset, energyCum, fps: sampleRate / HOP };
 }
 
+/* ---------- espectro: timbre (mel) e harmonia (croma) por frame ---------- */
+const N_FFT = 2048, SPEC_HOP = 1024, N_MEL = 24;
+
+function fftMag(re: Float64Array, im: Float64Array) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ar = re[i + k], ai = im[i + k];
+        const br = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+        const bi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+        re[i + k] = ar + br; im[i + k] = ai + bi;
+        re[i + k + len / 2] = ar - br; im[i + k + len / 2] = ai - bi;
+        const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+      }
+    }
+  }
+}
+
+function spectralFeatures(x: Float32Array, sampleRate: number) {
+  // reduz para metade da taxa (suficiente para timbre e harmonia)
+  const sr = sampleRate / 2;
+  const y = new Float32Array(Math.floor(x.length / 2));
+  for (let i = 0; i < y.length; i++) y[i] = (x[2 * i] + x[2 * i + 1]) * 0.5;
+  const frames = Math.max(0, Math.floor((y.length - N_FFT) / SPEC_HOP) + 1);
+  const win = new Float64Array(N_FFT);
+  for (let i = 0; i < N_FFT; i++) win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N_FFT - 1));
+  const bins = N_FFT / 2;
+  // filtros mel
+  const mel = (f: number) => 2595 * Math.log10(1 + f / 700);
+  const imel = (m: number) => 700 * (Math.pow(10, m / 2595) - 1);
+  const mLo = mel(40), mHi = mel(8000);
+  const edges = Array.from({ length: N_MEL + 2 }, (_, i) => imel(mLo + ((mHi - mLo) * i) / (N_MEL + 1)));
+  const binHz = sr / N_FFT;
+  // classe de altura por bin (60 Hz a 4 kHz)
+  const pc = new Int8Array(bins).fill(-1);
+  for (let b = 1; b < bins; b++) {
+    const f = b * binHz;
+    if (f >= 60 && f <= 4000) pc[b] = ((Math.round(69 + 12 * Math.log2(f / 440)) % 12) + 12) % 12;
+  }
+  const melOut = new Float32Array(frames * N_MEL);
+  const chromaOut = new Float32Array(frames * 12);
+  const re = new Float64Array(N_FFT), im = new Float64Array(N_FFT), mag = new Float64Array(bins);
+  for (let f = 0; f < frames; f++) {
+    const s0 = f * SPEC_HOP;
+    for (let i = 0; i < N_FFT; i++) { re[i] = y[s0 + i] * win[i]; im[i] = 0; }
+    fftMag(re, im);
+    for (let b = 0; b < bins; b++) mag[b] = re[b] * re[b] + im[b] * im[b];
+    for (let m = 0; m < N_MEL; m++) {
+      const lo = edges[m], c = edges[m + 1], hi = edges[m + 2];
+      let e = 0;
+      for (let b = Math.floor(lo / binHz); b <= Math.ceil(hi / binHz) && b < bins; b++) {
+        const fr = b * binHz;
+        const w = fr < c ? (fr - lo) / (c - lo) : (hi - fr) / (hi - c);
+        if (w > 0) e += w * mag[b];
+      }
+      melOut[f * N_MEL + m] = Math.log(1 + 100 * e);
+    }
+    let tot = 0;
+    for (let b = 1; b < bins; b++) if (pc[b] >= 0) { const v = Math.sqrt(mag[b]); chromaOut[f * 12 + pc[b]] += v; tot += v; }
+    if (tot > 0) for (let k = 0; k < 12; k++) chromaOut[f * 12 + k] /= tot;
+  }
+  return { mel: melOut, chroma: chromaOut, specFps: sr / SPEC_HOP, nMel: N_MEL };
+}
+
 self.onmessage = async (ev: MessageEvent<{ id: number; mono: Float32Array; sampleRate: number }>) => {
   const { id, mono, sampleRate } = ev.data;
   try {
@@ -61,6 +134,7 @@ self.onmessage = async (ev: MessageEvent<{ id: number; mono: Float32Array; sampl
     rhythm.estimates?.delete?.();
     rhythm.bpmIntervals?.delete?.();
     const feats = energyFeatures(mono, sampleRate);
+    const spec = spectralFeatures(mono, sampleRate);
     const msg = {
       id,
       bpm: rhythm.bpm,
@@ -69,9 +143,10 @@ self.onmessage = async (ev: MessageEvent<{ id: number; mono: Float32Array; sampl
       key: key.key,
       scale: key.scale === "minor" ? "minor" : "major",
       keyStrength: key.strength,
-      ...feats
+      ...feats,
+      ...spec
     };
-    (self as unknown as Worker).postMessage(msg, [beats.buffer, feats.lowOnset.buffer, feats.energyCum.buffer]);
+    (self as unknown as Worker).postMessage(msg, [beats.buffer, feats.lowOnset.buffer, feats.energyCum.buffer, spec.mel.buffer, spec.chroma.buffer]);
   } catch (err) {
     (self as unknown as Worker).postMessage({ id, error: String(err) });
   }

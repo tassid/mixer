@@ -1,5 +1,6 @@
 import { Plan } from "./plan";
 import { stretchRamp } from "./stretch";
+import { outgoingCut, placeElements } from "./elements";
 import { SR } from "./types";
 
 function noiseBuffer(ctx: BaseAudioContext, sec: number) {
@@ -44,17 +45,6 @@ function hardEnd(p: AudioParam, v: number, t: number) {
   p.linearRampToValueAtTime(0, t);
 }
 
-function impactAt(ctx: BaseAudioContext, bus: AudioNode, nb: AudioBuffer, t: number) {
-  const o = ctx.createOscillator(), og = ctx.createGain();
-  o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.45);
-  og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(0.75, t + 0.006); og.gain.exponentialRampToValueAtTime(0.0001, t + 1.1);
-  o.connect(og).connect(bus); o.start(t); o.stop(t + 1.2);
-  const ns = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), ng = ctx.createGain();
-  ns.buffer = nb; lp.type = "lowpass"; lp.frequency.value = 3200;
-  ng.gain.setValueAtTime(0.0001, t); ng.gain.exponentialRampToValueAtTime(0.35, t + 0.004); ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
-  ns.connect(lp).connect(ng).connect(bus); ns.start(t); ns.stop(t + 0.4);
-}
-
 /** Renderiza o plano inteiro offline (mais rápido que tempo real) e normaliza o pico em -1 dB. */
 export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
   const ctx = new OfflineAudioContext(2, Math.ceil(plan.total * SR), SR);
@@ -62,20 +52,67 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -6; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.15;
   bus.connect(comp).connect(ctx.destination);
+  const fxBus = ctx.createGain(); fxBus.gain.value = 0.8; fxBus.connect(bus);
   const nb = noiseBuffer(ctx, 2), ir = impulse(ctx);
 
-  for (const e of plan.entries) {
+  plan.entries.forEach((e, i) => {
     const { track, seg, T, gain: vol, end } = e;
     const bar = seg.bar, beat = seg.spb;
+    const swap = e.next; // tempo 1 da próxima
+    const nextEntry = plan.entries[i + 1];
+
+    /* ----- entrada por baixo (mixagem DJ): a música toca no BPM da anterior, sem graves ----- */
+    if (e.preroll) {
+      const pr = e.preroll;
+      const contentDur = pr.bars * seg.bar;
+      const stretched = stretchRamp(track.buffer, seg.t0 - contentDur, contentDur, pr.tempo, pr.tempo);
+      const src = ctx.createBufferSource(), shelf = ctx.createBiquadFilter(), g = ctx.createGain();
+      src.buffer = stretched;
+      shelf.type = "lowshelf"; shelf.frequency.value = 220; shelf.gain.value = -40;
+      const overlap = T - pr.start;
+      g.gain.setValueAtTime(0, pr.start);
+      g.gain.linearRampToValueAtTime(vol * 0.55, pr.start + overlap * 0.5);
+      g.gain.linearRampToValueAtTime(vol * 0.9, T - 0.006);
+      g.gain.linearRampToValueAtTime(0, T);
+      src.connect(shelf).connect(g).connect(bus);
+      src.start(pr.start);
+      src.stop(T + 0.01);
+    }
+
+    /* ----- trecho principal ----- */
     const src = ctx.createBufferSource(); src.buffer = track.buffer;
+    const shelf = ctx.createBiquadFilter(); shelf.type = "lowshelf"; shelf.frequency.value = 220; shelf.gain.value = 0;
     const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 10; hp.Q.value = 0.7;
     const g = ctx.createGain(); g.gain.value = 0;
-    src.connect(hp).connect(g).connect(bus);
-    g.gain.setValueAtTime(0, T); g.gain.linearRampToValueAtTime(vol, T + 0.008);
-    if (e.impact) impactAt(ctx, bus, nb, T);
+    const gate = ctx.createGain(); gate.gain.value = 1;
+    src.connect(shelf).connect(hp).connect(g).connect(gate).connect(bus);
+    g.gain.setValueAtTime(0, T); g.gain.linearRampToValueAtTime(vol, T + 0.006);
     src.start(T, seg.t0);
 
+    /* elementos da transição que sai desta música */
+    if (nextEntry && e.fx.length) {
+      const cut = outgoingCut(e.fx, swap, beat, bar);
+      if (cut !== null && e.exit !== "rewind") hardEnd(gate.gain, 1, cut);
+      placeElements(e.fx, {
+        ctx, bus: fxBus, noise: nb, reverb: ir, t: swap, beat, bar,
+        out: { buffer: track.buffer, contentEnd: seg.t0 + seg.len, vol }
+      });
+    }
+
     switch (e.exit) {
+      case "blend": {
+        // troca de graves no tempo 1 da próxima e saída suave em um compasso
+        const ov = nextEntry?.preroll ? swap - nextEntry.preroll.start : bar;
+        hp.frequency.setValueAtTime(10, swap - ov * 0.5);
+        hp.frequency.exponentialRampToValueAtTime(140, swap);
+        shelf.gain.setValueAtTime(0, swap - 0.01);
+        shelf.gain.linearRampToValueAtTime(-40, swap + beat * 0.25);
+        g.gain.setValueAtTime(vol, swap);
+        g.gain.linearRampToValueAtTime(0, end);
+        hp.frequency.exponentialRampToValueAtTime(900, end);
+        src.stop(end + 0.02);
+        break;
+      }
       case "fade": {
         const s = Math.max(T + 0.05, end - 2 * bar);
         g.gain.setValueAtTime(vol, s); g.gain.linearRampToValueAtTime(0, end); src.stop(end + 0.02);
@@ -126,7 +163,6 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
         break;
       }
       case "rampa": {
-        // trecho final esticado pelo SoundTouch: o andamento sobe sem mudar o tom
         const rs = T + (e.tm.rs ?? 0);
         const N = Math.min(4, seg.bars);
         hardEnd(g.gain, vol, rs + 0.006); src.stop(rs + 0.03);
@@ -134,7 +170,7 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
         const rsrc = ctx.createBufferSource(), rg = ctx.createGain();
         rsrc.buffer = ramp;
         rg.gain.setValueAtTime(0, rs); rg.gain.linearRampToValueAtTime(vol, rs + 0.006);
-        rsrc.connect(rg).connect(bus);
+        rsrc.connect(rg).connect(gate);
         hardEnd(rg.gain, vol, end);
         rsrc.start(rs); rsrc.stop(end + 0.02);
         break;
@@ -143,7 +179,7 @@ export async function renderPlan(plan: Plan): Promise<AudioBuffer> {
         hardEnd(g.gain, vol, end); src.stop(end + 0.02);
       }
     }
-  }
+  });
 
   const out = await ctx.startRendering();
   let peak = 0;
